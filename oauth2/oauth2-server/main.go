@@ -1,8 +1,14 @@
 package main
 
-import "fmt"
-import "io"
-import "os"
+import (
+	"fmt"
+	"io"
+	"net/http"
+	"os"
+
+	"pingdoms.co/m/handlers"
+)
+
 
 func main() {
 	if err := run(os.Stdout); err != nil {
@@ -11,10 +17,17 @@ func main() {
 	}
 }
 
+const port = "9123"
+
 func run(w io.Writer) error {
-	_, err := fmt.Fprintln(w, "Hello, World")
-	if err != nil {
-		return err
-	}
-	return nil
+	fmt.Fprintf(w, "Starting server on port %s\n", port)
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /", handlers.RootHandler) 
+
+	return http.ListenAndServe(
+		fmt.Sprintf(":%s", port),
+		mux,
+	)
 }
+
