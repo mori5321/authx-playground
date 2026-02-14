@@ -1,0 +1,7 @@
+version: '3'
+
+tasks:
+  doc:rfc:
+    desc: render the RFC note
+    cmds:
+      - ls *.md | entr -c glow RFC-6749.md
