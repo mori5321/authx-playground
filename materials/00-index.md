@@ -23,12 +23,16 @@ OAuth 2.0 認可サーバーを Go の標準ライブラリだけで自作する
 | 9 | [09-pkce.md](./09-pkce.md) | PKCE (Proof Key for Code Exchange) の実装 |
 | 10 | [10-refresh-token.md](./10-refresh-token.md) | リフレッシュトークンの実装 |
 | 11 | [11-security.md](./11-security.md) | セキュリティ対策とベストプラクティス |
-| 12 | [12-testing.md](./12-testing.md) | テストの書き方と動作確認 |
+| 12 | [12-testing.md](./12-testing.md) | テストの書き方と runn による API 統合テスト |
+| 13 | [13-property-based-testing.md](./13-property-based-testing.md) | Property Based Testing (`testing/quick`) |
+| 14 | [14-opentelemetry.md](./14-opentelemetry.md) | OpenTelemetry による可観測性 |
 
 ## 前提条件
 
-- Go 1.21 以上
-- 外部ライブラリは一切使用しない（標準ライブラリのみ）
+- Go 1.22 以上
+- ビジネスロジックは標準ライブラリのみ
+- テスト: [runn](https://github.com/k1LoW/runn) (API 統合テスト)
+- 可観測性: [OpenTelemetry Go SDK](https://opentelemetry.io/docs/languages/go/) (第14章)
 
 ## RFC 参照
 

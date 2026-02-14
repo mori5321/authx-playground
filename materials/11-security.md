@@ -327,4 +327,4 @@ func (sr *statusRecorder) WriteHeader(code int) {
 
 ## 次章
 
-[第12章: テストの書き方と動作確認](./12-testing.md) で、実装した認可サーバーのテストを書く。
+[第12章: テストの書き方と runn による API 統合テスト](./12-testing.md) で、ユニットテスト・ハンドラーテスト・runn を使った統合テストを書く。

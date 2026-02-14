@@ -2,13 +2,14 @@
 
 ## テスト方針
 
-認可サーバーのテストは以下の3レベルで行う。
+認可サーバーのテストは以下の4レベルで行う。
 
 | レベル | 対象 | ツール |
 |-------|------|-------|
 | ユニットテスト | 個別の関数・構造体 | `testing` パッケージ |
 | ハンドラーテスト | HTTP エンドポイント | `net/http/httptest` |
-| 統合テスト | 全フロー通し | `net/http/httptest` + curl |
+| API 統合テスト | エンドポイント間のフロー | **runn** |
+| Property Based Test | 入力空間の網羅的検証 | `testing/quick` (第13章) |
 
 ## 1. ユニットテスト
 
@@ -125,7 +126,6 @@ package pkce
 import "testing"
 
 func TestVerifyS256(t *testing.T) {
-	// RFC 7636 Appendix B の例
 	codeVerifier := "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"
 	codeChallenge := GenerateCodeChallenge(codeVerifier)
 
@@ -300,7 +300,6 @@ func TestTokenEndpoint_InvalidClient(t *testing.T) {
 func TestTokenEndpoint_AuthorizationCode(t *testing.T) {
 	handler, s := setupTokenTest()
 
-	// テスト用の認可コードを発行
 	authCode := &model.AuthorizationCode{
 		Code:        "test-auth-code",
 		ClientID:    "test-client",
@@ -345,7 +344,7 @@ func TestTokenEndpoint_AuthorizationCode_UsedCode(t *testing.T) {
 		RedirectURI: "http://localhost:3000/callback",
 		Scope:       "read:profile",
 		ExpiresAt:   time.Now().Add(10 * time.Minute),
-		Used:        true, // 使用済み
+		Used:        true,
 	}
 	s.SaveAuthorizationCode(authCode)
 
@@ -456,7 +455,6 @@ func TestRequireAuth_InsufficientScope(t *testing.T) {
 	issuer := token.NewJWTIssuer("test-secret-key-at-least-32-bytes!!", "http://test")
 	tokenStr, _ := issuer.GenerateAccessToken("user-1", "client-1", "read:profile")
 
-	// write:profile を要求するが、トークンには read:profile しかない
 	handler := RequireAuth(issuer, "write:profile")(
 		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			t.Error("handler should not be called")
@@ -475,166 +473,530 @@ func TestRequireAuth_InsufficientScope(t *testing.T) {
 }
 ```
 
-## 3. 統合テスト (手動)
+## 3. API 統合テスト (runn)
 
-すべてのコンポーネントを起動して、フロー全体を通してテストする。
+### runn とは
 
-### セットアップ
+[runn](https://github.com/k1LoW/runn) はシナリオベースの API テストツールである。YAML でテストシナリオを宣言的に記述し、ステップ間で値を受け渡しながら複数の API コールを連鎖させることができる。
 
-```bash
-# ターミナル 1: 認可サーバー
-JWT_SECRET_KEY="super-secret-key-at-least-32-bytes!!" go run main.go
-# => Authorization Server listening on :8080
+特徴:
+- YAML による宣言的なシナリオ定義
+- ステップ間の変数受け渡し（前のレスポンスを次のリクエストで使う）
+- `go test` との統合（`RunN` による Go テスト実行）
+- OpenAPI スキーマ検証との連携
 
-# ターミナル 2: リソースサーバー
-JWT_SECRET_KEY="super-secret-key-at-least-32-bytes!!" go run resource-server/main.go
-# => Resource Server listening on :8081
-```
-
-### テストフロー: Authorization Code Grant + PKCE
+### インストール
 
 ```bash
-# Step 1: PKCE パラメータの準備
-CODE_VERIFIER=$(openssl rand -hex 32)
-CODE_CHALLENGE=$(echo -n "$CODE_VERIFIER" | openssl dgst -sha256 -binary | base64 | tr '+/' '-_' | tr -d '=')
-echo "Verifier: $CODE_VERIFIER"
-echo "Challenge: $CODE_CHALLENGE"
-
-# Step 2: ブラウザで認可リクエストを開く
-open "http://localhost:8080/authorize?response_type=code&client_id=test-client&redirect_uri=http://localhost:3000/callback&scope=read:profile&state=test-state&code_challenge=${CODE_CHALLENGE}&code_challenge_method=S256"
-
-# Step 3: ログイン画面で認証
-#   Username: testuser
-#   Password: password
-
-# Step 4: 同意画面で「許可する」をクリック
-# → http://localhost:3000/callback?code=xxxx&state=test-state にリダイレクトされる
-# ブラウザのアドレスバーから code= の値をコピー
-
-# Step 5: トークン交換
-AUTH_CODE="<コピーした認可コード>"
-curl -s -X POST http://localhost:8080/token \
-  -H "Content-Type: application/x-www-form-urlencoded" \
-  -u "test-client:test-secret" \
-  -d "grant_type=authorization_code" \
-  -d "code=${AUTH_CODE}" \
-  -d "redirect_uri=http://localhost:3000/callback" \
-  -d "code_verifier=${CODE_VERIFIER}" | jq .
-
-# レスポンス例:
-# {
-#   "access_token": "eyJhbGciOiJIUzI1NiIs...",
-#   "token_type": "Bearer",
-#   "expires_in": 3600,
-#   "refresh_token": "a1b2c3d4...",
-#   "scope": "read:profile"
-# }
-
-# Step 6: アクセストークンでリソースにアクセス
-ACCESS_TOKEN="<取得したアクセストークン>"
-curl -s http://localhost:8081/api/profile \
-  -H "Authorization: Bearer ${ACCESS_TOKEN}" | jq .
-
-# レスポンス例:
-# {
-#   "id": "user-1",
-#   "username": "testuser",
-#   "email": "testuser@example.com"
-# }
-
-# Step 7: リフレッシュトークンでトークンを更新
-REFRESH_TOKEN="<取得したリフレッシュトークン>"
-curl -s -X POST http://localhost:8080/token \
-  -H "Content-Type: application/x-www-form-urlencoded" \
-  -u "test-client:test-secret" \
-  -d "grant_type=refresh_token" \
-  -d "refresh_token=${REFRESH_TOKEN}" | jq .
+go install github.com/k1LoW/runn/cmd/runn@latest
 ```
 
-### テストフロー: Client Credentials Grant
+### ディレクトリ構成
+
+```
+authz-server/
+├── runbooks/
+│   ├── client_credentials.yml       # Client Credentials フロー
+│   ├── token_error_cases.yml        # トークンエンドポイントのエラーケース
+│   ├── resource_server.yml          # リソースサーバーのアクセス制御
+│   ├── refresh_token.yml            # リフレッシュトークンフロー
+│   └── auth_code_with_pkce.yml      # Authorization Code + PKCE フロー
+└── integration_test.go              # Go テストからの実行
+```
+
+### シナリオ 1: Client Credentials Grant
+
+```yaml
+# runbooks/client_credentials.yml
+desc: "Client Credentials Grant でアクセストークンを取得する"
+runners:
+  authz: "http://localhost:8080"
+  resource: "http://localhost:8081"
+steps:
+  # --- Step 1: Client Credentials でトークンを取得 ---
+  - desc: "M2M クライアントでアクセストークンを取得"
+    authz:
+      /token:
+        post:
+          headers:
+            Content-Type: "application/x-www-form-urlencoded"
+            Authorization: "Basic bTJtLWNsaWVudDptMm0tc2VjcmV0"  # m2m-client:m2m-secret
+          body:
+            application/x-www-form-urlencoded:
+              grant_type: "client_credentials"
+              scope: "read:stats"
+    test: |
+      # ステータスコードの検証
+      current.res.status == 200
+      && current.res.headers["Content-Type"][0] == "application/json"
+      # レスポンスボディの検証
+      && current.res.body.token_type == "Bearer"
+      && current.res.body.access_token != ""
+      && current.res.body.expires_in == 3600
+      && current.res.body.scope == "read:stats"
+      # Client Credentials ではリフレッシュトークンは発行されない
+      && current.res.body.refresh_token == null
+    bind:
+      access_token: current.res.body.access_token
+
+  # --- Step 2: 取得したトークンでリソースサーバーにアクセス ---
+  - desc: "公開エンドポイントにアクセス（トークン不要）"
+    resource:
+      /api/public:
+        get: {}
+    test: |
+      current.res.status == 200
+      && current.res.body.message == "this is a public endpoint"
+```
+
+### シナリオ 2: トークンエンドポイントのエラーケース
+
+```yaml
+# runbooks/token_error_cases.yml
+desc: "トークンエンドポイントのエラーケースを網羅的にテストする"
+runners:
+  authz: "http://localhost:8080"
+steps:
+  # --- 不正なクライアント認証 ---
+  - desc: "不正なクライアントシークレットで 401 が返る"
+    authz:
+      /token:
+        post:
+          headers:
+            Content-Type: "application/x-www-form-urlencoded"
+            Authorization: "Basic bTJtLWNsaWVudDp3cm9uZy1zZWNyZXQ="  # m2m-client:wrong-secret
+          body:
+            application/x-www-form-urlencoded:
+              grant_type: "client_credentials"
+    test: |
+      current.res.status == 401
+      && current.res.body.error == "invalid_client"
+
+  # --- 存在しないクライアント ---
+  - desc: "存在しないクライアントで 401 が返る"
+    authz:
+      /token:
+        post:
+          headers:
+            Content-Type: "application/x-www-form-urlencoded"
+            Authorization: "Basic bm9uZXhpc3RlbnQ6c2VjcmV0"  # nonexistent:secret
+          body:
+            application/x-www-form-urlencoded:
+              grant_type: "client_credentials"
+    test: |
+      current.res.status == 401
+      && current.res.body.error == "invalid_client"
+
+  # --- サポートされていない grant_type ---
+  - desc: "サポートされていない grant_type で 400 が返る"
+    authz:
+      /token:
+        post:
+          headers:
+            Content-Type: "application/x-www-form-urlencoded"
+          body:
+            application/x-www-form-urlencoded:
+              grant_type: "password"
+              username: "testuser"
+              password: "password"
+    test: |
+      current.res.status == 400
+      && current.res.body.error == "unsupported_grant_type"
+
+  # --- 許可されていない grant_type ---
+  - desc: "Client Credentials 専用クライアントで authorization_code を使うと 400 が返る"
+    authz:
+      /token:
+        post:
+          headers:
+            Content-Type: "application/x-www-form-urlencoded"
+            Authorization: "Basic bTJtLWNsaWVudDptMm0tc2VjcmV0"  # m2m-client:m2m-secret
+          body:
+            application/x-www-form-urlencoded:
+              grant_type: "authorization_code"
+              code: "dummy-code"
+    test: |
+      current.res.status == 400
+      && current.res.body.error == "unauthorized_client"
+
+  # --- 不正な認可コード ---
+  - desc: "存在しない認可コードで 400 が返る"
+    authz:
+      /token:
+        post:
+          headers:
+            Content-Type: "application/x-www-form-urlencoded"
+            Authorization: "Basic dGVzdC1jbGllbnQ6dGVzdC1zZWNyZXQ="  # test-client:test-secret
+          body:
+            application/x-www-form-urlencoded:
+              grant_type: "authorization_code"
+              code: "nonexistent-code"
+              redirect_uri: "http://localhost:3000/callback"
+    test: |
+      current.res.status == 400
+      && current.res.body.error == "invalid_grant"
+
+  # --- 不正なスコープ ---
+  - desc: "許可されていないスコープで 400 が返る"
+    authz:
+      /token:
+        post:
+          headers:
+            Content-Type: "application/x-www-form-urlencoded"
+            Authorization: "Basic bTJtLWNsaWVudDptMm0tc2VjcmV0"  # m2m-client:m2m-secret
+          body:
+            application/x-www-form-urlencoded:
+              grant_type: "client_credentials"
+              scope: "read:profile delete:everything"
+    test: |
+      current.res.status == 400
+      && current.res.body.error == "invalid_scope"
+```
+
+### シナリオ 3: リソースサーバーのアクセス制御
+
+```yaml
+# runbooks/resource_server.yml
+desc: "リソースサーバーのアクセス制御を検証する"
+runners:
+  authz: "http://localhost:8080"
+  resource: "http://localhost:8081"
+steps:
+  # --- トークンなしでアクセス → 401 ---
+  - desc: "トークンなしで保護されたリソースにアクセスすると 401 が返る"
+    resource:
+      /api/profile:
+        get: {}
+    test: |
+      current.res.status == 401
+
+  # --- 不正なトークンでアクセス → 401 ---
+  - desc: "不正なトークンで 401 が返る"
+    resource:
+      /api/profile:
+        get:
+          headers:
+            Authorization: "Bearer invalid.token.value"
+    test: |
+      current.res.status == 401
+
+  # --- 正規のトークンを取得してアクセス ---
+  - desc: "Client Credentials でトークンを取得"
+    authz:
+      /token:
+        post:
+          headers:
+            Content-Type: "application/x-www-form-urlencoded"
+            Authorization: "Basic bTJtLWNsaWVudDptMm0tc2VjcmV0"
+          body:
+            application/x-www-form-urlencoded:
+              grant_type: "client_credentials"
+              scope: "read:stats"
+    test: |
+      current.res.status == 200
+    bind:
+      access_token: current.res.body.access_token
+
+  # --- スコープ不足でアクセス → 403 ---
+  - desc: "read:stats トークンで read:profile が必要なリソースにアクセスすると 403 が返る"
+    resource:
+      /api/profile:
+        get:
+          headers:
+            Authorization: "Bearer {{ access_token }}"
+    test: |
+      current.res.status == 403
+```
+
+### シナリオ 4: リフレッシュトークンフロー
+
+```yaml
+# runbooks/refresh_token.yml
+desc: "リフレッシュトークンのローテーションを検証する"
+runners:
+  authz: "http://localhost:8080"
+vars:
+  # テスト前にストアに認可コードを登録しておく前提
+  # Go テスト側で httptest.Server を使う場合はそこで準備する
+  test_auth_code: "test-refresh-flow-code"
+steps:
+  # --- Step 1: 認可コードでトークンを取得 ---
+  - desc: "認可コードでアクセストークンとリフレッシュトークンを取得"
+    authz:
+      /token:
+        post:
+          headers:
+            Content-Type: "application/x-www-form-urlencoded"
+            Authorization: "Basic dGVzdC1jbGllbnQ6dGVzdC1zZWNyZXQ="  # test-client:test-secret
+          body:
+            application/x-www-form-urlencoded:
+              grant_type: "authorization_code"
+              code: "{{ test_auth_code }}"
+              redirect_uri: "http://localhost:3000/callback"
+    test: |
+      current.res.status == 200
+      && current.res.body.access_token != ""
+      && current.res.body.refresh_token != ""
+    bind:
+      access_token_1: current.res.body.access_token
+      refresh_token_1: current.res.body.refresh_token
+
+  # --- Step 2: リフレッシュトークンで新しいトークンを取得 ---
+  - desc: "リフレッシュトークンでトークンを更新（ローテーション）"
+    authz:
+      /token:
+        post:
+          headers:
+            Content-Type: "application/x-www-form-urlencoded"
+            Authorization: "Basic dGVzdC1jbGllbnQ6dGVzdC1zZWNyZXQ="
+          body:
+            application/x-www-form-urlencoded:
+              grant_type: "refresh_token"
+              refresh_token: "{{ refresh_token_1 }}"
+    test: |
+      current.res.status == 200
+      && current.res.body.access_token != ""
+      && current.res.body.refresh_token != ""
+      # 新しいトークンが発行されている
+      && current.res.body.access_token != "{{ access_token_1 }}"
+      && current.res.body.refresh_token != "{{ refresh_token_1 }}"
+    bind:
+      access_token_2: current.res.body.access_token
+      refresh_token_2: current.res.body.refresh_token
+
+  # --- Step 3: 旧リフレッシュトークンが無効化されていることを確認 ---
+  - desc: "旧リフレッシュトークンは使用できない（ローテーション検証）"
+    authz:
+      /token:
+        post:
+          headers:
+            Content-Type: "application/x-www-form-urlencoded"
+            Authorization: "Basic dGVzdC1jbGllbnQ6dGVzdC1zZWNyZXQ="
+          body:
+            application/x-www-form-urlencoded:
+              grant_type: "refresh_token"
+              refresh_token: "{{ refresh_token_1 }}"
+    test: |
+      current.res.status == 400
+      && current.res.body.error == "invalid_grant"
+```
+
+### シナリオ 5: Authorization Code + PKCE フロー
+
+認可エンドポイントはブラウザのリダイレクトを伴うため、runn ではトークンエンドポイント側の PKCE 検証をテストする。認可コードはテスト前にストアに直接登録する。
+
+```yaml
+# runbooks/auth_code_with_pkce.yml
+desc: "PKCE 付き Authorization Code Grant のトークン交換を検証する"
+runners:
+  authz: "http://localhost:8080"
+vars:
+  # テスト側で code_challenge = SHA256("test-code-verifier-12345678901234567890") のコードを登録
+  code_verifier: "test-code-verifier-12345678901234567890"
+  auth_code_with_pkce: "pkce-test-code"
+steps:
+  # --- 正常系: 正しい code_verifier ---
+  - desc: "正しい code_verifier でトークン交換が成功する"
+    authz:
+      /token:
+        post:
+          headers:
+            Content-Type: "application/x-www-form-urlencoded"
+            Authorization: "Basic dGVzdC1jbGllbnQ6dGVzdC1zZWNyZXQ="
+          body:
+            application/x-www-form-urlencoded:
+              grant_type: "authorization_code"
+              code: "{{ auth_code_with_pkce }}"
+              redirect_uri: "http://localhost:3000/callback"
+              code_verifier: "{{ code_verifier }}"
+    test: |
+      current.res.status == 200
+      && current.res.body.access_token != ""
+```
+
+### Go テストからの runn 実行
+
+runn のランブックを `go test` から実行する。テストサーバーをインプロセスで起動し、ランブックの接続先を動的に差し替える。
+
+```go
+// integration_test.go
+//go:build integration
+
+package main
+
+import (
+	"authz-server/internal/model"
+	"authz-server/internal/pkce"
+	"authz-server/internal/session"
+	"authz-server/internal/store"
+	"authz-server/internal/token"
+	"authz-server/internal/handler"
+	"net/http/httptest"
+	"testing"
+	"time"
+
+	"github.com/k1LoW/runn"
+)
+
+func TestRunbooks(t *testing.T) {
+	// --- テストサーバーのセットアップ ---
+	s := store.NewMemoryStore()
+	store.Seed(s)
+	issuer := token.NewJWTIssuer("test-secret-key-at-least-32-bytes!!", "http://test")
+	sm := session.NewManager()
+
+	authorizeHandler := handler.NewAuthorizeHandler(s, sm)
+	tokenHandler := handler.NewTokenHandler(s, issuer)
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /authorize", authorizeHandler.HandleAuthorize)
+	mux.HandleFunc("POST /login", authorizeHandler.HandleLogin)
+	mux.HandleFunc("POST /authorize", authorizeHandler.HandleConsent)
+	mux.HandleFunc("POST /token", tokenHandler.HandleToken)
+
+	authzServer := httptest.NewServer(mux)
+	defer authzServer.Close()
+
+	// リソースサーバー
+	resourceMux := http.NewServeMux()
+	resourceMux.Handle("GET /api/profile",
+		middleware.RequireAuth(issuer, "read:profile")(
+			http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				json.NewEncoder(w).Encode(map[string]string{
+					"id": "user-1", "username": "testuser",
+				})
+			}),
+		),
+	)
+	resourceMux.HandleFunc("GET /api/public", func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]string{"message": "this is a public endpoint"})
+	})
+
+	resourceServer := httptest.NewServer(resourceMux)
+	defer resourceServer.Close()
+
+	// --- テストデータの準備 ---
+
+	// リフレッシュトークンテスト用の認可コード
+	s.SaveAuthorizationCode(&model.AuthorizationCode{
+		Code:        "test-refresh-flow-code",
+		ClientID:    "test-client",
+		UserID:      "user-1",
+		RedirectURI: "http://localhost:3000/callback",
+		Scope:       "read:profile",
+		ExpiresAt:   time.Now().Add(10 * time.Minute),
+	})
+
+	// PKCE テスト用の認可コード
+	codeVerifier := "test-code-verifier-12345678901234567890"
+	codeChallenge := pkce.GenerateCodeChallenge(codeVerifier)
+	s.SaveAuthorizationCode(&model.AuthorizationCode{
+		Code:                "pkce-test-code",
+		ClientID:            "test-client",
+		UserID:              "user-1",
+		RedirectURI:         "http://localhost:3000/callback",
+		Scope:               "read:profile",
+		ExpiresAt:           time.Now().Add(10 * time.Minute),
+		CodeChallenge:       codeChallenge,
+		CodeChallengeMethod: "S256",
+	})
+
+	// --- runn でランブックを実行 ---
+	opts := []runn.Option{
+		runn.T(t),
+		runn.Runner("authz", authzServer.URL),     // YAML の authz を差し替え
+		runn.Runner("resource", resourceServer.URL), // YAML の resource を差し替え
+	}
+
+	o, err := runn.Load("runbooks/**/*.yml", opts...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := o.RunN(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+}
+```
+
+### 実行方法
 
 ```bash
-curl -s -X POST http://localhost:8080/token \
-  -H "Content-Type: application/x-www-form-urlencoded" \
-  -u "m2m-client:m2m-secret" \
-  -d "grant_type=client_credentials&scope=read:stats" | jq .
+# runn CLI で個別のランブック実行（サーバー起動済みの場合）
+runn run runbooks/client_credentials.yml
+
+# すべてのランブックを実行
+runn run runbooks/*.yml
+
+# go test 経由で実行（httptest を使うのでサーバー起動不要）
+go test -tags integration -v -run TestRunbooks
+
+# runn list でランブック一覧を確認
+runn list runbooks/
 ```
+
+### runn の主要機能まとめ
+
+| 機能 | YAML での書き方 |
+|------|---------------|
+| 変数定義 | `vars:` セクション |
+| 前ステップの値参照 | `{{ access_token }}` |
+| レスポンス値のバインド | `bind:` で変数に格納 |
+| アサーション | `test:` で CEL 式で記述 |
+| HTTP ランナー | `runners:` で接続先を定義 |
+| Go テスト連携 | `runn.T(t)` で `*testing.T` と統合 |
+| ランナー差し替え | `runn.Runner("name", url)` で URL を動的に変更 |
+
+### curl 手動テストとの比較
+
+| 項目 | curl 手動テスト | runn |
+|------|---------------|------|
+| 再現性 | 低い（手で打つたびに異なる） | 高い（YAML で宣言的） |
+| CI 統合 | スクリプト化が必要 | `go test` で実行可能 |
+| ステップ間の値引き継ぎ | 変数に手動代入 | `bind:` で自動 |
+| アサーション | `jq` で目視確認 | `test:` で自動検証 |
+| エラーケース網羅 | 面倒 | YAML を並べるだけ |
 
 ## テスト実行
 
 ```bash
-# 全テスト実行
-go test ./...
-
-# 特定パッケージのテスト
-go test ./internal/token/
-go test ./internal/pkce/
-go test ./internal/handler/
+# ユニットテスト
+go test ./internal/...
 
 # 詳細出力
-go test -v ./...
+go test -v ./internal/...
 
 # カバレッジ
-go test -cover ./...
-go test -coverprofile=coverage.out ./...
+go test -cover ./internal/...
+go test -coverprofile=coverage.out ./internal/...
 go tool cover -html=coverage.out
+
+# 統合テスト (runn)
+go test -tags integration -v -run TestRunbooks
 ```
 
 ## エラーケースのテスト一覧
 
 必ずテストすべきエラーケース:
 
-| エンドポイント | ケース |
-|--------------|--------|
-| `/authorize` | 不正な `client_id` |
-| `/authorize` | 不正な `redirect_uri` |
-| `/authorize` | 不正な `response_type` |
-| `/authorize` | スコープ超過 |
-| `/token` | 不正なクライアント認証 |
-| `/token` | 期限切れの認可コード |
-| `/token` | 使用済みの認可コード |
-| `/token` | client_id 不一致 |
-| `/token` | redirect_uri 不一致 |
-| `/token` | PKCE 検証失敗 |
-| `/token` | 無効なリフレッシュトークン |
-| `/token` | 無効化されたリフレッシュトークン |
-| `/token` | サポートされていない grant_type |
-| Resource API | トークンなし → 401 |
-| Resource API | 期限切れトークン → 401 |
-| Resource API | スコープ不足 → 403 |
+| エンドポイント | ケース | テスト種別 |
+|--------------|--------|-----------|
+| `/authorize` | 不正な `client_id` | ハンドラーテスト |
+| `/authorize` | 不正な `redirect_uri` | ハンドラーテスト |
+| `/authorize` | 不正な `response_type` | ハンドラーテスト |
+| `/authorize` | スコープ超過 | ハンドラーテスト |
+| `/token` | 不正なクライアント認証 | runn |
+| `/token` | 期限切れの認可コード | ハンドラーテスト |
+| `/token` | 使用済みの認可コード | runn / ハンドラー |
+| `/token` | client_id 不一致 | ハンドラーテスト |
+| `/token` | redirect_uri 不一致 | ハンドラーテスト |
+| `/token` | PKCE 検証失敗 | runn |
+| `/token` | 無効なリフレッシュトークン | runn |
+| `/token` | 無効化されたリフレッシュトークン | runn |
+| `/token` | サポートされていない grant_type | runn |
+| Resource API | トークンなし → 401 | runn |
+| Resource API | 期限切れトークン → 401 | ハンドラーテスト |
+| Resource API | スコープ不足 → 403 | runn |
 
-## まとめ
+## 次章
 
-本教材では、OAuth 2.0 認可サーバーを Go の標準ライブラリだけで実装した。以下のコンポーネントを作成した：
-
-1. **データモデル** — Client, AuthorizationCode, Token 等の構造体
-2. **インメモリストア** — スレッドセーフなデータストア
-3. **認可エンドポイント** — ログイン画面、同意画面、認可コード発行
-4. **トークンエンドポイント** — 3種類のグラントタイプに対応
-5. **JWT** — HMAC-SHA256 による署名・検証
-6. **リソースサーバー** — Bearer トークン検証ミドルウェア
-7. **PKCE** — 認可コード横取り攻撃の対策
-8. **リフレッシュトークン** — トークンローテーション
-9. **セキュリティ対策** — CSRF, レート制限, ロギング
-
-### 本番環境に向けて追加すべきこと
-
-- データベース (PostgreSQL 等) への移行
-- HTTPS の強制
-- クライアントシークレットの bcrypt ハッシュ化
-- トークンの失効管理 (Revocation Endpoint, RFC 7009)
-- トークンイントロスペクション (RFC 7662)
-- Dynamic Client Registration (RFC 7591)
-- OpenID Connect 対応 (ID Token の発行)
-
-### 参考 RFC 一覧
-
-| RFC | タイトル |
-|-----|---------|
-| RFC 6749 | The OAuth 2.0 Authorization Framework |
-| RFC 6750 | Bearer Token Usage |
-| RFC 6819 | OAuth 2.0 Threat Model and Security Considerations |
-| RFC 7519 | JSON Web Token (JWT) |
-| RFC 7636 | Proof Key for Code Exchange (PKCE) |
-| RFC 7009 | OAuth 2.0 Token Revocation |
-| RFC 7662 | OAuth 2.0 Token Introspection |
+[第13章: Property Based Testing](./13-property-based-testing.md) で、ランダム入力を使った網羅的なテスト手法を学ぶ。
