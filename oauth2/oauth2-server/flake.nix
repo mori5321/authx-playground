@@ -3,7 +3,7 @@
 
   inputs = {
     # Stable チャンネル (例: 24.11)。必要に応じてバージョンを変更してください。
-    nixpkgs.url = "github:nixos/nixpkgs/nixos-24.11";
+    nixpkgs.url = "github:nixos/nixpkgs/nixos-25.11";
 
     # Unstable チャンネル (Node.js 24 や最新の pnpm 用)
     nixpkgs-unstable.url = "github:nixos/nixpkgs/nixos-unstable";

@@ -1,3 +1,4 @@
-module pingdoms.co/m
+module pingdoms.co/oauth2-server
 
-go 1.23.8
+go 1.25.6
+
