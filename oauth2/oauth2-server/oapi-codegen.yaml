@@ -1,0 +1,13 @@
+# 生成するGoのパッケージ名
+package: api
+
+# 生成設定
+generate:
+  models: true       # 型定義 (struct) を生成
+  std-http-server: true
+  # client: true     # APIクライアントを生成する場合
+  embedded-spec: true # OpenAPI定義をコード内に埋め込む（バリデーション等で使用）
+  strict-server: true
+
+# 出力先ファイル
+output: api/api.gen.go

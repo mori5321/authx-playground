@@ -5,3 +5,7 @@ tasks:
     desc: render the RFC note
     cmds:
       - ls *.md | entr -c glow RFC-6749.md
+  oapi:gen:
+    desc: generate type from openapi spec
+    cmds:
+      - oapi-codegen --config=oapi-codegen.yaml openapi.yaml

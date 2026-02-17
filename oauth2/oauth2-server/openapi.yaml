@@ -1,0 +1,32 @@
+openapi: '3.0.3'
+info:
+  title: 'oauth2-server'
+  description: 'OAuth2 Practice Server API'
+  version: '0.0.1'
+
+servers:
+  - url: 'http://localhost:9321'
+
+paths:
+  /:
+    get:
+      summary: 'API Root Endpoint'
+      description: 'Returns a welcome message.'
+      responses:
+        '200':
+          description: 'Successful response'
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    $ref: '#/components/schemas/ServerStatus'
+components:
+  schemas:
+    ServerStatus:
+      type: string
+      enum:
+        - ok
+        - ng
+      description: 'Status of the Server'
