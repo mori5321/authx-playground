@@ -12,7 +12,7 @@ tasks:
   build:
     desc: build the project
     cmds:
-      - go build -o bin/authz-server cmd/main.go
+      - go build -o bin/oauth2-server cmd/main.go
   test:
     desc: run tests
     cmds:
