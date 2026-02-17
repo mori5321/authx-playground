@@ -5,10 +5,14 @@ tasks:
     desc: render the RFC note
     cmds:
       - ls *.md | entr -c glow RFC-6749.md
-  oapi:gen:
+  api:gen:
     desc: generate type from openapi spec
     cmds:
-      - oapi-codegen --config=oapi-codegen.yaml openapi.yaml
+      - oapi-codegen --config=api/oapi-codegen.yaml api/openapi.yaml
+  build:
+    desc: build the project
+    cmds:
+      - go build -o bin/authz-server cmd/main.go
   test:
     desc: run tests
     cmds:

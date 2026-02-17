@@ -1,2 +1,3 @@
 .direnv/
 oauth2-server
+bin/

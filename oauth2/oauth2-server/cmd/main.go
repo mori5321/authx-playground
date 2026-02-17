@@ -8,7 +8,7 @@ import (
 	"context"
 
 	"pingdoms.co/oauth2-server/api"
-	"pingdoms.co/oauth2-server/handlers"
+	"pingdoms.co/oauth2-server/internal/handlers"
 )
 
 func main() {
