@@ -9,3 +9,11 @@ tasks:
     desc: generate type from openapi spec
     cmds:
       - oapi-codegen --config=oapi-codegen.yaml openapi.yaml
+  test:
+    desc: run tests
+    cmds:
+      - go test ./...
+  test:v:
+    desc: run tests with verbose output
+    cmds:
+      - go test -v ./...

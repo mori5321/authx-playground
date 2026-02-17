@@ -5,10 +5,11 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"context"
 
-	"pingdoms.co/m/handlers"
+	"pingdoms.co/oauth2-server/api"
+	"pingdoms.co/oauth2-server/handlers"
 )
-
 
 func main() {
 	if err := run(os.Stdout); err != nil {
@@ -19,15 +20,33 @@ func main() {
 
 const port = "9123"
 
-func run(w io.Writer) error {
-	fmt.Fprintf(w, "Starting server on port %s\n", port)
+type StrictServer struct {}
 
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /", handlers.RootHandler) 
+var _ api.StrictServerInterface = (*StrictServer)(nil)
 
+func run(w io.Writer) error {	
+	handlers := Handlers()
+
+	fmt.Fprintf(w, "Starting server on port %s ...\n", port)
 	return http.ListenAndServe(
 		fmt.Sprintf(":%s", port),
-		mux,
+		handlers,
 	)
 }
 
+func Handlers() http.Handler {
+	mux := http.NewServeMux()
+	serverImpl := &StrictServer{}
+	server := api.NewStrictHandler(
+		serverImpl,
+		[]api.StrictMiddlewareFunc{},
+	)
+	handlers := api.HandlerFromMux(server, mux)
+
+	return handlers
+}
+
+func (s *StrictServer) Get(ctx context.Context, request api.GetRequestObject) (api.GetResponseObject, error) {
+
+	return handlers.RootHandler(ctx, request)
+}

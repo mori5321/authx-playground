@@ -1,39 +1,30 @@
 package handlers
 
 import (
+	"context"
 	"testing"
-	"encoding/json"
-	"net/http"
-	"net/http/httptest"
+
+	"pingdoms.co/oauth2-server/api"
 )
 
-func TestRootHandlers(t *testing.T) {
-	t.Run("GET / returns HTTP 200 { status: OK }", func(t *testing.T) {
-		req, err := http.NewRequest("GET", "/", nil)
-		if err != nil {
-			t.Fatal(err)
-		}
+func TestRootHandler(t *testing.T) {
+	t.Run("RootHandler should return", func(t *testing.T) {
+		ctx := context.Background()
+		req := api.GetRequestObject{}
 		
-		got := httptest.NewRecorder()
-		RootHandler(got, req)
-
-		httpOK := 200
-		if got.Code != httpOK{
-			t.Errorf("Expected status code %d, got %d",  httpOK, got.Code)
+		res, err:= RootHandler(ctx, req)
+		if err != nil {
+			t.Errorf("Expected no error, got %v", err)
 		}
 
-		applicationJSON := "application/json"
-		if got := got.Header().Get("Content-Type"); got != applicationJSON {
-			t.Errorf("Expected Content-Type '%s', got '%s'", applicationJSON, got)
+		response, ok := res.(api.Get200JSONResponse)
+		if !ok {
+			t.Errorf("Expected response of type Get200JSONResponse, got %T", res)
 		}
 
-		var response rootResponse
-		if err := json.NewDecoder(got.Body).Decode(&response); err != nil {
-			t.Fatalf("Failed to decode response: %v", err)
-		}
-
-		if response.Status != statusOK {
-			t.Errorf("Expected status 'OK', got '%s'", response.Status)
+		expectedStatus := api.Ok
+		if response.Status == nil || *response.Status != expectedStatus {
+			t.Errorf("Expected status '%s', got '%v'", expectedStatus, response.Status)
 		}
 	})
 }

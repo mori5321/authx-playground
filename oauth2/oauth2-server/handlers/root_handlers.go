@@ -1,35 +1,16 @@
 package handlers
 
 import (
-	"encoding/json"
-	"net/http"
+	"context"
+	"pingdoms.co/oauth2-server/api"
 )
 
-type rootResponse struct {
-	Status serverStatus `json:"status"`
-}
 
-type serverStatus string
-const (
-  statusOK serverStatus = "ok"
-	statusNG serverStatus = "ng"
-)
+func RootHandler(ctx context.Context, request api.GetRequestObject) (api.GetResponseObject, error) {
+	status := api.Ok
 
-func newRootResponse(status serverStatus) rootResponse {
-	return rootResponse{
-		Status: status,
-	}
-}
-
-func RootHandler(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	response := newRootResponse(statusOK) 
-	
-	if err := json.NewEncoder(w).Encode(response); err != nil {
-		http.Error(w, "Failed to encode response", http.StatusInternalServerError)
-		return
-	}
-
-	json.NewEncoder(w).Encode(response)
+	return api.Get200JSONResponse{
+		Status: &status,
+	}, nil
 }
 
